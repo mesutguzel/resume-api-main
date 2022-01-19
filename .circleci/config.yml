@@ -1,42 +1,73 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/2.0/configuration-reference
-version: 2.1
-
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
+# Golang CircleCI 2.0 configuration file
+# Check https://circleci.com/docs/2.0/language-go/ for more details
+version: 2
 jobs:
-  build:
-    working_directory: ~/repo
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
+
+  test:
     docker:
-      - image: circleci/golang:1.15.8
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+      - image: circleci/golang:1.14
+    working_directory: /go/src/github.com/mesutguzel/resume-api-main
     steps:
       - checkout
-      - restore_cache:
-          keys:
-            - go-mod-v4-{{ checksum "go.sum" }}
       - run:
-          name: Install Dependencies
-          command: go mod download
-      - save_cache:
-          key: go-mod-v4-{{ checksum "go.sum" }}
-          paths:
-            - "/go/pkg/mod"
+          name: Install dependencies
+          command: make install
       - run:
           name: Run tests
-          command: |
-            mkdir -p /tmp/test-reports
-            gotestsum --junitfile /tmp/test-reports/unit-tests.xml
-      - store_test_results:
-          path: /tmp/test-reports
+          command:  make test
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
+  build:
+    docker:
+      - image: circleci/golang:1.14
+    working_directory: ~/temp
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: make install
+      - run:
+          name: Build executable
+          command: make compile
+      - run:
+          name: Make temp build folder
+          command: mkdir build
+      - run:
+          name: Zip executable
+          command: zip build/resume-api.zip -q resume-api
+      - persist_to_workspace:
+          root: .
+          paths:
+            - build/resume-api.zip
+
+  deploy:
+    docker:
+      - image: 'circleci/python:3.7.6'
+    working_directory: ~/temp
+    steps:
+      - attach_workspace:
+          at: ~/temp
+      - run:
+          name: Install AWS CLI
+          command: sudo pip install awscli
+      - deploy:
+          name: Deploy to AWS S3
+          command: |
+            aws lambda update-function-code \
+              --function-name=resume-api \
+              --zip-file=fileb://build/resume-api.zip 1> /dev/null \
+              --region=us-east-1
+
 workflows:
-  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
+  version: 2
+  cicd:
     jobs:
-      - build
+      - test
+      - build:
+          requires:
+            - test
+      - deploy:
+          requires:
+            - build
+          filters:
+            branches:
+              only: master
